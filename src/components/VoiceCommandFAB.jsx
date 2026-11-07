@@ -95,10 +95,10 @@ export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
   };
 
   return (
-    <div className="fixed bottom-6 right-6 z-40 flex flex-col items-end gap-3">
+    <div className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-40 flex flex-col items-end gap-2.5">
       {feedback && (
         <div
-          className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl shadow-xl border text-xs font-medium max-w-xs sm:max-w-sm ${
+          className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl shadow-xl border text-xs font-medium max-w-[85vw] sm:max-w-sm ${
             feedback.type === 'success'
               ? 'bg-emerald-950/95 border-emerald-700 text-emerald-200'
               : 'bg-rose-950/95 border-rose-700 text-rose-200'
@@ -116,7 +116,7 @@ export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
       {showInputBox && (
         <form
           onSubmit={handleManualSubmit}
-          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 rounded-2xl shadow-2xl w-80 sm:w-96 flex flex-col gap-2"
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 rounded-2xl shadow-2xl w-[90vw] sm:w-96 flex flex-col gap-2"
         >
           <div className="flex items-center justify-between text-xs text-slate-400 px-1">
             <span className="flex items-center gap-1.5 font-medium text-indigo-400">
@@ -125,7 +125,7 @@ export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
             <button
               type="button"
               onClick={() => setShowInputBox(false)}
-              className="hover:text-slate-200"
+              className="p-1 hover:text-slate-200"
             >
               <X className="w-4 h-4"/>
             </button>
@@ -137,14 +137,14 @@ export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
               value={manualText}
               onChange={(e) => setManualText(e.target.value)}
               placeholder="Ej: Pasa a In Progress la tarea de..."
-              className="flex-1 bg-slate-100 dark:bg-slate-800 text-sm px-3 py-2 rounded-xl outline-none focus:ring-2 ring-indigo-500"
+              className="flex-1 bg-slate-100 dark:bg-slate-800 text-sm px-3 py-2.5 rounded-xl outline-none focus:ring-2 ring-indigo-500"
             />
             <button
               type="submit"
               disabled={isProcessing || !manualText.trim()}
-              className="p-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl transition"
+              className="p-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl transition shrink-0"
             >
-              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin"/> : <Send className="w-4 h-4"/>}
+              {isProcessing ? <Loader2 className="w-5 h-5 animate-spin"/> : <Send className="w-5 h-5"/>}
             </button>
           </div>
         </form>
@@ -153,7 +153,7 @@ export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
       <div className="flex items-center gap-2">
         <button
           onClick={() => setShowInputBox(!showInputBox)}
-          className="p-3 rounded-full bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shadow-lg hover:border-indigo-500 transition"
+          className="p-3.5 rounded-full bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shadow-lg hover:border-indigo-500 active:scale-95 transition"
           title="Escribir o dictar con teclado"
         >
           <Keyboard className="w-5 h-5"/>
@@ -162,7 +162,7 @@ export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
         <button
           onClick={toggleListening}
           disabled={isProcessing}
-          className={`flex items-center gap-2 px-5 py-3.5 rounded-full font-medium text-sm text-white shadow-xl transition-all ${
+          className={`flex items-center gap-2 px-4 sm:px-5 py-3.5 rounded-full font-medium text-sm text-white shadow-xl active:scale-95 transition-all ${
             isListening
               ? 'bg-rose-600 hover:bg-rose-500 animate-pulse ring-4 ring-rose-500/30'
               : isProcessing
@@ -173,7 +173,7 @@ export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
           {isProcessing ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin"/>
-              <span>Procesando...</span>
+              <span className="hidden sm:inline">Procesando...</span>
             </>
           ) : isListening ? (
             <>
@@ -183,7 +183,7 @@ export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
           ) : (
             <>
               <Mic className="w-5 h-5"/>
-              <span>Dictar a Gemini</span>
+              <span className="hidden sm:inline">Dictar a Gemini</span>
             </>
           )}
         </button>
