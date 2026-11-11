@@ -17,16 +17,20 @@ EXCEPTION
   WHEN duplicate_object THEN null;
 END $$;
 
--- 3. Tabla de Contextos Dinámicos
+-- 3. Tabla de Contextos Dinámicos (con soporte para archivar)
 CREATE TABLE IF NOT EXISTS public.contexts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(user_id, name)
 );
 
--- 4. Tabla de Proyectos
+-- Migración por si la tabla ya existía sin la columna active
+ALTER TABLE public.contexts ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- 4. Tabla de Proyectos (con soporte para archivar/finalizar)
 CREATE TABLE IF NOT EXISTS public.projects (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -49,14 +53,25 @@ CREATE TABLE IF NOT EXISTS public.tasks (
   completed_at TIMESTAMPTZ
 );
 
--- 6. Tabla de API Keys para acceso externo de Gemini
+-- 6. Tabla de Enlaces Guardados ("Ver más tarde")
+CREATE TABLE IF NOT EXISTS public.saved_links (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  title TEXT,
+  description TEXT DEFAULT '',
+  read BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 7. Tabla de API Keys para acceso externo de Gemini
 CREATE TABLE IF NOT EXISTS public.user_api_keys (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   api_key TEXT NOT NULL UNIQUE DEFAULT ('gtd_' || encode(gen_random_bytes(24), 'hex')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 7. Trigger: Gestión automática de fechas de creación y finalización
+-- 8. Trigger: Gestión automática de fechas de creación y finalización
 CREATE OR REPLACE FUNCTION public.handle_task_completion_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -75,12 +90,12 @@ BEFORE INSERT OR UPDATE ON public.tasks
 FOR EACH ROW
 EXECUTE FUNCTION public.handle_task_completion_timestamp();
 
--- 8. Trigger: Inicializar contextos ("Trabajo", "Casa") y API Key al crear usuario
+-- 9. Trigger: Inicializar contextos ("Trabajo", "Casa") y API Key al crear usuario
 CREATE OR REPLACE FUNCTION public.handle_new_user_setup()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.contexts (user_id, name)
-  VALUES (NEW.id, 'Trabajo'), (NEW.id, 'Casa')
+  INSERT INTO public.contexts (user_id, name, active)
+  VALUES (NEW.id, 'Trabajo', TRUE), (NEW.id, 'Casa', TRUE)
   ON CONFLICT DO NOTHING;
 
   INSERT INTO public.user_api_keys (user_id)
@@ -97,10 +112,11 @@ AFTER INSERT ON auth.users
 FOR EACH ROW
 EXECUTE FUNCTION public.handle_new_user_setup();
 
--- 9. Políticas RLS (Row Level Security)
+-- 10. Políticas RLS (Row Level Security)
 ALTER TABLE public.contexts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.saved_links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_api_keys ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Aislamiento de contextos por usuario" ON public.contexts;
@@ -113,6 +129,10 @@ CREATE POLICY "Aislamiento de proyectos por usuario" ON public.projects
 
 DROP POLICY IF EXISTS "Aislamiento de tareas por usuario" ON public.tasks;
 CREATE POLICY "Aislamiento de tareas por usuario" ON public.tasks
+  FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Aislamiento de enlaces por usuario" ON public.saved_links;
+CREATE POLICY "Aislamiento de enlaces por usuario" ON public.saved_links
   FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
 DROP POLICY IF EXISTS "Lectura y regeneración de API Key propia" ON public.user_api_keys;

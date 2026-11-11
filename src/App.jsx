@@ -5,7 +5,8 @@ import MarkdownRenderer from './components/MarkdownRenderer';
 import {
   Inbox, Kanban, CheckCircle2, Plus, Search,
   Moon, Sun, LogOut, Key, FolderPlus, Calendar, Trash2, Edit3, Check, X, SlidersHorizontal,
-  Maximize2, Minimize2
+  Maximize2, Minimize2, Bookmark, BookmarkCheck, ExternalLink, Copy, RotateCcw,
+  FolderArchive, Link2, EyeOff, Archive, CheckCheck, Folder
 } from 'lucide-react';
 
 const ALL_STATUSES = [
@@ -30,8 +31,11 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [contexts, setContexts] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [links, setLinks] = useState([]);
+  const [linksTableMissing, setLinksTableMissing] = useState(false);
   const [apiKey, setApiKey] = useState('');
 
+  // activeView can be: 'inbox' | 'kanban' | 'completed' | 'archived_projects' | 'links'
   const [activeView, setActiveView] = useState('kanban');
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -60,6 +64,13 @@ export default function App() {
 
   const [newContextName, setNewContextName] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
+
+  // Links state
+  const [newLinkUrl, setNewLinkUrl] = useState('');
+  const [newLinkTitle, setNewLinkTitle] = useState('');
+  const [linkFilter, setLinkFilter] = useState('pending'); // 'all' | 'pending' | 'read'
+  const [linkSearch, setLinkSearch] = useState('');
+  const [copiedLinkId, setCopiedLinkId] = useState(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -95,14 +106,22 @@ export default function App() {
     setLoading(true);
     const userId = session.user.id;
 
-    let [ctxRes, prjRes, tskRes, keyRes] = await Promise.all([
+    let [ctxRes, prjRes, tskRes, keyRes, linksRes] = await Promise.all([
       supabase.from('contexts').select('*').order('name'),
       supabase.from('projects').select('*').order('name'),
       supabase.from('tasks').select('*').order('created_at', { ascending: false }),
-      supabase.from('user_api_keys').select('api_key').eq('user_id', userId).single()
+      supabase.from('user_api_keys').select('api_key').eq('user_id', userId).single(),
+      supabase.from('saved_links').select('*').order('created_at', { ascending: false })
     ]);
 
-    if (!ctxRes.data || ctxRes.data.length === 0) {
+    // Handle contexts with active fallback from localStorage
+    const archivedContextIds = JSON.parse(localStorage.getItem('archived_context_ids') || '[]');
+    const processedContexts = (ctxRes.data || []).map(c => ({
+      ...c,
+      active: c.active !== undefined ? c.active : !archivedContextIds.includes(c.id)
+    }));
+
+    if (processedContexts.length === 0) {
       const { data: insertedCtx } = await supabase
         .from('contexts')
         .insert([
@@ -110,13 +129,25 @@ export default function App() {
           { user_id: userId, name: 'Casa' }
         ])
         .select();
-      ctxRes.data = insertedCtx || [];
+      setContexts((insertedCtx || []).map(c => ({ ...c, active: true })));
+    } else {
+      setContexts(processedContexts);
     }
 
-    setContexts(ctxRes.data || []);
     setProjects(prjRes.data || []);
     setTasks(tskRes.data || []);
     if (keyRes.data) setApiKey(keyRes.data.api_key);
+
+    // Handle saved_links (table or localStorage fallback)
+    if (linksRes.error) {
+      setLinksTableMissing(true);
+      const localLinks = JSON.parse(localStorage.getItem('saved_links') || '[]');
+      setLinks(localLinks);
+    } else {
+      setLinksTableMissing(false);
+      setLinks(linksRes.data || []);
+    }
+
     setLoading(false);
   };
 
@@ -131,8 +162,15 @@ export default function App() {
     await supabase.auth.signOut();
   };
 
+  // Active / Archived subsets
+  const activeContexts = useMemo(() => contexts.filter(c => c.active !== false), [contexts]);
+  const archivedContexts = useMemo(() => contexts.filter(c => c.active === false), [contexts]);
+
+  const activeProjects = useMemo(() => projects.filter(p => p.active !== false), [projects]);
+  const archivedProjects = useMemo(() => projects.filter(p => p.active === false), [projects]);
+
   const openTaskModal = (task = null, defaultStatus = null) => {
-    const defaultCtx = contexts.find(c => c.name.toLowerCase() === 'trabajo') || contexts[0];
+    const defaultCtx = activeContexts.find(c => c.name.toLowerCase() === 'trabajo') || activeContexts[0] || contexts[0];
     if (task) {
       setEditingTask(task);
       setTaskForm({
@@ -226,6 +264,7 @@ export default function App() {
     }
   };
 
+  // Context Management
   const handleAddContext = async (e) => {
     e.preventDefault();
     if (!newContextName.trim()) return;
@@ -235,23 +274,139 @@ export default function App() {
       .select()
       .single();
     if (!error && data) {
-      setContexts(prev => [...prev, data]);
+      setContexts(prev => [...prev, { ...data, active: true }]);
       setNewContextName('');
     }
   };
 
+  const handleToggleContextActive = async (contextId, newActive) => {
+    setContexts(prev => prev.map(c => c.id === contextId ? { ...c, active: newActive } : c));
+
+    // Try Supabase update
+    await supabase.from('contexts').update({ active: newActive }).eq('id', contextId);
+
+    // Also persist in localStorage for resilience
+    const savedArchived = JSON.parse(localStorage.getItem('archived_context_ids') || '[]');
+    let updated;
+    if (!newActive) {
+      updated = [...new Set([...savedArchived, contextId])];
+    } else {
+      updated = savedArchived.filter(id => id !== contextId);
+    }
+    localStorage.setItem('archived_context_ids', JSON.stringify(updated));
+  };
+
+  // Project Management
   const handleAddProject = async (e) => {
     e.preventDefault();
     if (!newProjectName.trim()) return;
     const { data, error } = await supabase
       .from('projects')
-      .insert({ user_id: session.user.id, name: newProjectName.trim() })
+      .insert({ user_id: session.user.id, name: newProjectName.trim(), active: true })
       .select()
       .single();
     if (!error && data) {
       setProjects(prev => [...prev, data]);
       setNewProjectName('');
     }
+  };
+
+  const handleToggleProjectActive = async (projectId, newActive) => {
+    setProjects(prev => prev.map(p => p.id === projectId ? { ...p, active: newActive } : p));
+    await supabase
+      .from('projects')
+      .update({ active: newActive })
+      .eq('id', projectId);
+  };
+
+  const handleDeleteProject = async (projectId) => {
+    if (!window.confirm('¿Seguro que deseas eliminar este proyecto? Las tareas asociadas mantendrán su estado pero quedarán sin proyecto.')) {
+      return;
+    }
+    const { error } = await supabase.from('projects').delete().eq('id', projectId);
+    if (!error) {
+      setProjects(prev => prev.filter(p => p.id !== projectId));
+      setTasks(prev => prev.map(t => t.project_id === projectId ? { ...t, project_id: null } : t));
+    }
+  };
+
+  // Saved Links Management
+  const handleAddLink = async (e) => {
+    e.preventDefault();
+    let url = newLinkUrl.trim();
+    if (!url) return;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://' + url;
+    }
+
+    let fallbackTitle = url;
+    try {
+      fallbackTitle = new URL(url).hostname.replace('www.', '');
+    } catch {}
+
+    const title = newLinkTitle.trim() || fallbackTitle;
+
+    const newLinkItem = {
+      id: crypto.randomUUID(),
+      user_id: session?.user?.id,
+      url,
+      title,
+      read: false,
+      created_at: new Date().toISOString()
+    };
+
+    if (!linksTableMissing) {
+      const { data, error } = await supabase
+        .from('saved_links')
+        .insert({
+          user_id: session.user.id,
+          url,
+          title,
+          read: false
+        })
+        .select()
+        .single();
+
+      if (!error && data) {
+        setLinks(prev => [data, ...prev]);
+      } else {
+        setLinks(prev => [newLinkItem, ...prev]);
+        localStorage.setItem('saved_links', JSON.stringify([newLinkItem, ...links]));
+      }
+    } else {
+      setLinks(prev => [newLinkItem, ...prev]);
+      localStorage.setItem('saved_links', JSON.stringify([newLinkItem, ...links]));
+    }
+
+    setNewLinkUrl('');
+    setNewLinkTitle('');
+  };
+
+  const handleToggleLinkRead = async (linkId, currentRead) => {
+    const updatedRead = !currentRead;
+    setLinks(prev => prev.map(l => l.id === linkId ? { ...l, read: updatedRead } : l));
+    if (!linksTableMissing) {
+      await supabase.from('saved_links').update({ read: updatedRead }).eq('id', linkId);
+    } else {
+      const updated = links.map(l => l.id === linkId ? { ...l, read: updatedRead } : l);
+      localStorage.setItem('saved_links', JSON.stringify(updated));
+    }
+  };
+
+  const handleDeleteLink = async (linkId) => {
+    setLinks(prev => prev.filter(l => l.id !== linkId));
+    if (!linksTableMissing) {
+      await supabase.from('saved_links').delete().eq('id', linkId);
+    } else {
+      const updated = links.filter(l => l.id !== linkId);
+      localStorage.setItem('saved_links', JSON.stringify(updated));
+    }
+  };
+
+  const handleCopyLink = (url, id) => {
+    navigator.clipboard.writeText(url);
+    setCopiedLinkId(id);
+    setTimeout(() => setCopiedLinkId(null), 2000);
   };
 
   const contextMap = useMemo(() => Object.fromEntries(contexts.map(c => [c.id, c.name])), [contexts]);
@@ -296,6 +451,23 @@ export default function App() {
       });
   }, [tasks, searchQuery, filterStatus, filterContext, filterProject, sortBy, contextMap, projectMap]);
 
+  const filteredLinks = useMemo(() => {
+    return links
+      .filter(link => {
+        if (linkFilter === 'pending') return !link.read;
+        if (linkFilter === 'read') return link.read;
+        return true;
+      })
+      .filter(link => {
+        if (!linkSearch.trim()) return true;
+        const q = linkSearch.toLowerCase();
+        return (
+          (link.title && link.title.toLowerCase().includes(q)) ||
+          (link.url && link.url.toLowerCase().includes(q))
+        );
+      });
+  }, [links, linkFilter, linkSearch]);
+
   const handleDragStart = (e, taskId) => {
     e.dataTransfer.setData('text/plain', taskId);
   };
@@ -327,6 +499,9 @@ export default function App() {
 
   const inboxCount = tasks.filter(t => t.status === 'Inbox').length;
   const completedCount = tasks.filter(t => t.status === 'Completado').length;
+  const archivedProjectsCount = archivedProjects.length;
+  const pendingLinksCount = links.filter(l => !l.read).length;
+
   const activeFiltersCount =
     (filterContext !== 'ALL' ? 1 : 0) +
     (filterProject !== 'ALL' ? 1 : 0) +
@@ -359,18 +534,18 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
       <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2 sticky top-0 z-30">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 font-bold text-base sm:text-lg tracking-tight">
+        <div className="flex items-center gap-3 xl:gap-4 overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-2 font-bold text-base sm:text-lg tracking-tight shrink-0">
             <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center text-xs sm:text-sm">
               GTD
             </span>
-            <span className="truncate">Workspace</span>
+            <span className="truncate hidden sm:inline">Workspace</span>
           </div>
 
-          <nav className="hidden md:flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+          <nav className="hidden lg:flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
             <button
               onClick={() => setActiveView('inbox')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                 activeView === 'inbox'
                   ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
@@ -378,14 +553,14 @@ export default function App() {
             >
               <Inbox className="w-4 h-4"/>
               <span>Inbox</span>
-              <span className="px-1.5 py-0.5 text-xs rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300">
+              <span className="px-1.5 py-0.2 text-[11px] rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300">
                 {inboxCount}
               </span>
             </button>
 
             <button
               onClick={() => setActiveView('kanban')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                 activeView === 'kanban'
                   ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
@@ -397,7 +572,7 @@ export default function App() {
 
             <button
               onClick={() => setActiveView('completed')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                 activeView === 'completed'
                   ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
@@ -405,14 +580,48 @@ export default function App() {
             >
               <CheckCircle2 className="w-4 h-4"/>
               <span>Completado</span>
-              <span className="px-1.5 py-0.5 text-xs rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-300">
+              <span className="px-1.5 py-0.2 text-[11px] rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-300">
                 {completedCount}
               </span>
+            </button>
+
+            <button
+              onClick={() => setActiveView('archived_projects')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                activeView === 'archived_projects'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              <FolderArchive className="w-4 h-4"/>
+              <span>Proyectos finalizados</span>
+              {archivedProjectsCount > 0 && (
+                <span className="px-1.5 py-0.2 text-[11px] rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                  {archivedProjectsCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveView('links')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                activeView === 'links'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              <Bookmark className="w-4 h-4"/>
+              <span>Ver más tarde</span>
+              {pendingLinksCount > 0 && (
+                <span className="px-1.5 py-0.2 text-[11px] rounded-full bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 font-semibold">
+                  {pendingLinksCount}
+                </span>
+              )}
             </button>
           </nav>
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <button
             onClick={() => openTaskModal()}
             className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition shadow-sm"
@@ -455,138 +664,141 @@ export default function App() {
         </div>
       </header>
 
-      <section className="bg-white/80 dark:bg-slate-900/80 backdrop-blur border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-            <input
-              type="text"
-              placeholder="Buscar tarea..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 text-sm bg-slate-100 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 ring-indigo-500/50"
-            />
+      {/* Filter bar only for task views */}
+      {['inbox', 'kanban', 'completed'].includes(activeView) && (
+        <section className="bg-white/80 dark:bg-slate-900/80 backdrop-blur border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+              <input
+                type="text"
+                placeholder="Buscar tarea..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-3 py-1.5 text-sm bg-slate-100 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 ring-indigo-500/50"
+              />
+            </div>
+
+            <button
+              onClick={() => setShowMobileFilters(!showMobileFilters)}
+              className={`md:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition ${
+                activeFiltersCount > 0 || showMobileFilters
+                  ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500/40 text-indigo-600 dark:text-indigo-300'
+                  : 'bg-slate-100 dark:bg-slate-800 border-transparent text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5"/>
+              <span>Filtros</span>
+              {activeFiltersCount > 0 && (
+                <span className="px-1.5 py-0.2 bg-indigo-600 text-white rounded-full text-[10px]">
+                  {activeFiltersCount}
+                </span>
+              )}
+            </button>
+
+            <div className="hidden md:flex items-center gap-2.5">
+              <select
+                value={filterContext}
+                onChange={e => setFilterContext(e.target.value)}
+                className="bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg text-xs outline-none"
+              >
+                <option value="ALL">Todos los contextos</option>
+                {activeContexts.map(c => (
+                  <option key={c.id} value={c.id}>@{c.name}</option>
+                ))}
+              </select>
+
+              <select
+                value={filterProject}
+                onChange={e => setFilterProject(e.target.value)}
+                className="bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg text-xs outline-none"
+              >
+                <option value="ALL">Todos los proyectos</option>
+                <option value="NONE">Sin proyecto</option>
+                {activeProjects.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+
+              {activeView === 'kanban' && (
+                <select
+                  value={filterStatus}
+                  onChange={e => setFilterStatus(e.target.value)}
+                  className="bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg text-xs outline-none"
+                >
+                  <option value="ALL">Todos los estados</option>
+                  {KANBAN_COLUMNS.map(col => (
+                    <option key={col.id} value={col.id}>{col.label}</option>
+                  ))}
+                </select>
+              )}
+
+              <select
+                value={sortBy}
+                onChange={e => setSortBy(e.target.value)}
+                className="bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg text-xs outline-none"
+              >
+                <option value="created_at_desc">Más recientes</option>
+                <option value="created_at_asc">Más antiguas</option>
+                <option value="name_asc">Nombre (A-Z)</option>
+                <option value="name_desc">Nombre (Z-A)</option>
+                <option value="context">Contexto</option>
+                <option value="project">Proyecto</option>
+              </select>
+            </div>
           </div>
 
-          <button
-            onClick={() => setShowMobileFilters(!showMobileFilters)}
-            className={`md:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition ${
-              activeFiltersCount > 0 || showMobileFilters
-                ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500/40 text-indigo-600 dark:text-indigo-300'
-                : 'bg-slate-100 dark:bg-slate-800 border-transparent text-slate-600 dark:text-slate-300'
-            }`}
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5"/>
-            <span>Filtros</span>
-            {activeFiltersCount > 0 && (
-              <span className="px-1.5 py-0.2 bg-indigo-600 text-white rounded-full text-[10px]">
-                {activeFiltersCount}
-              </span>
-            )}
-          </button>
+          {showMobileFilters && (
+            <div className="md:hidden grid grid-cols-2 gap-2 pt-2.5 mt-2 border-t border-slate-200 dark:border-slate-800">
+              <select
+                value={filterContext}
+                onChange={e => setFilterContext(e.target.value)}
+                className="bg-slate-100 dark:bg-slate-800 px-2.5 py-2 rounded-lg text-xs outline-none"
+              >
+                <option value="ALL">Contexto: Activos</option>
+                {activeContexts.map(c => (
+                  <option key={c.id} value={c.id}>@{c.name}</option>
+                ))}
+              </select>
 
-          <div className="hidden md:flex items-center gap-2.5">
-            <select
-              value={filterContext}
-              onChange={e => setFilterContext(e.target.value)}
-              className="bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg text-xs outline-none"
-            >
-              <option value="ALL">Todos los contextos</option>
-              {contexts.map(c => (
-                <option key={c.id} value={c.id}>@{c.name}</option>
-              ))}
-            </select>
+              <select
+                value={filterProject}
+                onChange={e => setFilterProject(e.target.value)}
+                className="bg-slate-100 dark:bg-slate-800 px-2.5 py-2 rounded-lg text-xs outline-none"
+              >
+                <option value="ALL">Proyecto: Activos</option>
+                <option value="NONE">Sin proyecto</option>
+                {activeProjects.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
 
-            <select
-              value={filterProject}
-              onChange={e => setFilterProject(e.target.value)}
-              className="bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg text-xs outline-none"
-            >
-              <option value="ALL">Todos los proyectos</option>
-              <option value="NONE">Sin proyecto</option>
-              {projects.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-
-            {activeView === 'kanban' && (
               <select
                 value={filterStatus}
                 onChange={e => setFilterStatus(e.target.value)}
-                className="bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg text-xs outline-none"
+                className="bg-slate-100 dark:bg-slate-800 px-2.5 py-2 rounded-lg text-xs outline-none"
               >
-                <option value="ALL">Todos los estados</option>
+                <option value="ALL">Estado: Todos</option>
                 {KANBAN_COLUMNS.map(col => (
                   <option key={col.id} value={col.id}>{col.label}</option>
                 ))}
               </select>
-            )}
 
-            <select
-              value={sortBy}
-              onChange={e => setSortBy(e.target.value)}
-              className="bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg text-xs outline-none"
-            >
-              <option value="created_at_desc">Más recientes</option>
-              <option value="created_at_asc">Más antiguas</option>
-              <option value="name_asc">Nombre (A-Z)</option>
-              <option value="name_desc">Nombre (Z-A)</option>
-              <option value="context">Contexto</option>
-              <option value="project">Proyecto</option>
-            </select>
-          </div>
-        </div>
-
-        {showMobileFilters && (
-          <div className="md:hidden grid grid-cols-2 gap-2 pt-2.5 mt-2 border-t border-slate-200 dark:border-slate-800">
-            <select
-              value={filterContext}
-              onChange={e => setFilterContext(e.target.value)}
-              className="bg-slate-100 dark:bg-slate-800 px-2.5 py-2 rounded-lg text-xs outline-none"
-            >
-              <option value="ALL">Contexto: Todos</option>
-              {contexts.map(c => (
-                <option key={c.id} value={c.id}>@{c.name}</option>
-              ))}
-            </select>
-
-            <select
-              value={filterProject}
-              onChange={e => setFilterProject(e.target.value)}
-              className="bg-slate-100 dark:bg-slate-800 px-2.5 py-2 rounded-lg text-xs outline-none"
-            >
-              <option value="ALL">Proyecto: Todos</option>
-              <option value="NONE">Sin proyecto</option>
-              {projects.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-
-            <select
-              value={filterStatus}
-              onChange={e => setFilterStatus(e.target.value)}
-              className="bg-slate-100 dark:bg-slate-800 px-2.5 py-2 rounded-lg text-xs outline-none"
-            >
-              <option value="ALL">Estado: Todos</option>
-              {KANBAN_COLUMNS.map(col => (
-                <option key={col.id} value={col.id}>{col.label}</option>
-              ))}
-            </select>
-
-            <select
-              value={sortBy}
-              onChange={e => setSortBy(e.target.value)}
-              className="bg-slate-100 dark:bg-slate-800 px-2.5 py-2 rounded-lg text-xs outline-none"
-            >
-              <option value="created_at_desc">Orden: Recientes</option>
-              <option value="created_at_asc">Orden: Antiguas</option>
-              <option value="name_asc">Orden: A - Z</option>
-              <option value="context">Orden: Contexto</option>
-              <option value="project">Orden: Proyecto</option>
-            </select>
-          </div>
-        )}
-      </section>
+              <select
+                value={sortBy}
+                onChange={e => setSortBy(e.target.value)}
+                className="bg-slate-100 dark:bg-slate-800 px-2.5 py-2 rounded-lg text-xs outline-none"
+              >
+                <option value="created_at_desc">Orden: Recientes</option>
+                <option value="created_at_asc">Orden: Antiguas</option>
+                <option value="name_asc">Orden: A - Z</option>
+                <option value="context">Orden: Contexto</option>
+                <option value="project">Orden: Proyecto</option>
+              </select>
+            </div>
+          )}
+        </section>
+      )}
 
       <main className="flex-1 p-3 sm:p-6 pb-28 md:pb-24 overflow-x-hidden">
         {activeView === 'inbox' && (
@@ -841,12 +1053,289 @@ export default function App() {
             )}
           </div>
         )}
+
+        {/* View: Proyectos Finalizados / Archivados */}
+        {activeView === 'archived_projects' && (
+          <div className="max-w-4xl mx-auto space-y-4">
+            <div className="flex items-center justify-between mb-3 px-1">
+              <div>
+                <h2 className="text-base sm:text-lg font-semibold flex items-center gap-2">
+                  <FolderArchive className="w-5 h-5 text-indigo-500"/>
+                  Proyectos Finalizados
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Proyectos archivados que ya no se muestran en los selectores de notas. Puedes reactivarlos en cualquier momento.
+                </p>
+              </div>
+              <button
+                onClick={() => setIsMetaModalOpen(true)}
+                className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-xl hover:bg-indigo-500 shrink-0 flex items-center gap-1.5"
+              >
+                <FolderPlus className="w-3.5 h-3.5" />
+                <span>Gestionar Proyectos</span>
+              </button>
+            </div>
+
+            {archivedProjects.length === 0 ? (
+              <div className="bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-800 rounded-2xl p-12 text-center text-sm text-slate-400 space-y-2">
+                <FolderArchive className="w-8 h-8 mx-auto text-slate-400 opacity-60"/>
+                <p className="font-medium text-slate-500 dark:text-slate-300">No hay proyectos finalizados</p>
+                <p className="text-xs text-slate-400">
+                  Cuando finalices o archives un proyecto desde el gestor de proyectos, se guardará aquí.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {archivedProjects.map(project => {
+                  const projectTasks = tasks.filter(t => t.project_id === project.id);
+                  const completedProjTasks = projectTasks.filter(t => t.status === 'Completado');
+
+                  return (
+                    <div
+                      key={project.id}
+                      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:border-indigo-500/40 transition flex flex-col justify-between gap-3"
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                            <Folder className="w-4 h-4 text-slate-400"/>
+                            {project.name}
+                          </h3>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500">
+                            Archivado
+                          </span>
+                        </div>
+                        {project.description && (
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {project.description}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-3 text-xs text-slate-400 pt-1">
+                          <span>
+                            Tareas: <strong>{completedProjTasks.length}</strong> / {projectTasks.length} completadas
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800 gap-2">
+                        <span className="text-[11px] text-slate-400">
+                          {new Date(project.created_at).toLocaleDateString()}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleToggleProjectActive(project.id, true)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white dark:hover:bg-indigo-600 dark:hover:text-white text-xs font-medium transition"
+                            title="Reactivar proyecto"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Reactivar</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteProject(project.id)}
+                            className="p-1.5 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition"
+                            title="Eliminar proyecto definitivamente"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* View: Ver Más Tarde (Enlaces) */}
+        {activeView === 'links' && (
+          <div className="max-w-4xl mx-auto space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 px-1">
+              <div>
+                <h2 className="text-base sm:text-lg font-semibold flex items-center gap-2">
+                  <Bookmark className="w-5 h-5 text-indigo-500"/>
+                  Ver Más Tarde (Enlaces)
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Guarda enlaces, artículos, vídeos o recursos web para revisarlos con calma.
+                </p>
+              </div>
+              <span className="text-xs px-2.5 py-1 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 font-medium self-start sm:self-auto">
+                {pendingLinksCount} pendientes
+              </span>
+            </div>
+
+            {/* Quick add link form */}
+            <form
+              onSubmit={handleAddLink}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-sm flex flex-col sm:flex-row items-center gap-2.5"
+            >
+              <div className="relative flex-1 w-full">
+                <Link2 className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+                <input
+                  type="text"
+                  required
+                  placeholder="Pegar URL (ej. https://articulo.com)..."
+                  value={newLinkUrl}
+                  onChange={e => setNewLinkUrl(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 ring-indigo-500"
+                />
+              </div>
+              <input
+                type="text"
+                placeholder="Título o nota (opcional)..."
+                value={newLinkTitle}
+                onChange={e => setNewLinkTitle(e.target.value)}
+                className="w-full sm:w-64 px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 ring-indigo-500"
+              />
+              <button
+                type="submit"
+                className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl text-sm transition shrink-0 flex items-center justify-center gap-1.5 shadow-xs"
+              >
+                <Plus className="w-4 h-4"/>
+                <span>Guardar enlace</span>
+              </button>
+            </form>
+
+            {/* Controls: Search & Tabs */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+                <input
+                  type="text"
+                  placeholder="Buscar entre enlaces guardados..."
+                  value={linkSearch}
+                  onChange={e => setLinkSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl outline-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-1 bg-slate-200/80 dark:bg-slate-900 p-1 rounded-xl self-start sm:self-auto">
+                <button
+                  onClick={() => setLinkFilter('pending')}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition ${
+                    linkFilter === 'pending'
+                      ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  Pendientes ({links.filter(l => !l.read).length})
+                </button>
+                <button
+                  onClick={() => setLinkFilter('read')}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition ${
+                    linkFilter === 'read'
+                      ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  Vistos ({links.filter(l => l.read).length})
+                </button>
+                <button
+                  onClick={() => setLinkFilter('all')}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition ${
+                    linkFilter === 'all'
+                      ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  Todos ({links.length})
+                </button>
+              </div>
+            </div>
+
+            {/* Links list */}
+            {filteredLinks.length === 0 ? (
+              <div className="bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-800 rounded-2xl p-12 text-center text-sm text-slate-400 space-y-2">
+                <Bookmark className="w-8 h-8 mx-auto text-slate-400 opacity-60"/>
+                <p className="font-medium text-slate-500 dark:text-slate-300">
+                  {linkFilter === 'read' ? 'No hay enlaces vistos' : 'No hay enlaces pendientes'}
+                </p>
+                <p className="text-xs text-slate-400">
+                  Pega una URL arriba para guardarla y revisarla más tarde.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {filteredLinks.map(link => (
+                  <div
+                    key={link.id}
+                    className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-indigo-500/40 transition shadow-xs"
+                  >
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`font-semibold text-sm hover:underline flex items-center gap-1.5 truncate ${
+                            link.read
+                              ? 'line-through text-slate-400'
+                              : 'text-slate-900 dark:text-slate-100 text-indigo-600 dark:text-indigo-400'
+                          }`}
+                        >
+                          <span className="truncate">{link.title || link.url}</span>
+                          <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-70" />
+                        </a>
+                      </div>
+                      <p className="text-xs text-slate-400 font-mono truncate max-w-xl">
+                        {link.url}
+                      </p>
+                      <div className="flex items-center gap-3 text-[11px] text-slate-400 pt-0.5">
+                        <span>Guardado: {new Date(link.created_at).toLocaleDateString()}</span>
+                        {link.read && (
+                          <span className="text-emerald-500 font-medium">Revisado</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-1.5 shrink-0 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 dark:border-slate-800">
+                      <button
+                        onClick={() => handleCopyLink(link.url, link.id)}
+                        className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                        title="Copiar enlace"
+                      >
+                        {copiedLinkId === link.id ? (
+                          <Check className="w-4 h-4 text-emerald-500"/>
+                        ) : (
+                          <Copy className="w-4 h-4"/>
+                        )}
+                      </button>
+
+                      <button
+                        onClick={() => handleToggleLinkRead(link.id, link.read)}
+                        className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium transition ${
+                          link.read
+                            ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                            : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-600 hover:text-white'
+                        }`}
+                        title={link.read ? 'Marcar como no leído' : 'Marcar como leído'}
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>{link.read ? 'Visto' : 'Marcar visto'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleDeleteLink(link.id)}
+                        className="p-2 text-slate-400 hover:text-rose-500 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/30 transition"
+                        title="Eliminar enlace"
+                      >
+                        <Trash2 className="w-4 h-4"/>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
-      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 z-30 flex items-center justify-around py-1.5 pb-safe">
+      {/* Mobile Bottom Navigation Bar (5 tabs) */}
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 z-30 grid grid-cols-5 py-1 pb-safe">
         <button
           onClick={() => setActiveView('inbox')}
-          className={`flex flex-col items-center gap-0.5 py-1 px-4 rounded-xl transition ${
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-1 transition ${
             activeView === 'inbox'
               ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
               : 'text-slate-500 dark:text-slate-400'
@@ -855,29 +1344,29 @@ export default function App() {
           <div className="relative">
             <Inbox className="w-5 h-5"/>
             {inboxCount > 0 && (
-              <span className="absolute -top-1.5 -right-2.5 px-1.5 py-0.2 text-[10px] rounded-full bg-indigo-600 text-white font-bold">
+              <span className="absolute -top-1 -right-2 px-1 text-[9px] rounded-full bg-indigo-600 text-white font-bold leading-tight">
                 {inboxCount}
               </span>
             )}
           </div>
-          <span className="text-[11px]">Inbox</span>
+          <span className="text-[10px] truncate max-w-[60px]">Inbox</span>
         </button>
 
         <button
           onClick={() => setActiveView('kanban')}
-          className={`flex flex-col items-center gap-0.5 py-1 px-4 rounded-xl transition ${
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-1 transition ${
             activeView === 'kanban'
               ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
               : 'text-slate-500 dark:text-slate-400'
           }`}
         >
           <Kanban className="w-5 h-5"/>
-          <span className="text-[11px]">Tablero</span>
+          <span className="text-[10px] truncate max-w-[60px]">Tablero</span>
         </button>
 
         <button
           onClick={() => setActiveView('completed')}
-          className={`flex flex-col items-center gap-0.5 py-1 px-4 rounded-xl transition ${
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-1 transition ${
             activeView === 'completed'
               ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
               : 'text-slate-500 dark:text-slate-400'
@@ -886,15 +1375,54 @@ export default function App() {
           <div className="relative">
             <CheckCircle2 className="w-5 h-5"/>
             {completedCount > 0 && (
-              <span className="absolute -top-1.5 -right-3 px-1.5 py-0.2 text-[10px] rounded-full bg-emerald-600 text-white font-bold">
+              <span className="absolute -top-1 -right-2 px-1 text-[9px] rounded-full bg-emerald-600 text-white font-bold leading-tight">
                 {completedCount}
               </span>
             )}
           </div>
-          <span className="text-[11px]">Completado</span>
+          <span className="text-[10px] truncate max-w-[60px]">Hechas</span>
+        </button>
+
+        <button
+          onClick={() => setActiveView('archived_projects')}
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-1 transition ${
+            activeView === 'archived_projects'
+              ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
+              : 'text-slate-500 dark:text-slate-400'
+          }`}
+        >
+          <div className="relative">
+            <FolderArchive className="w-5 h-5"/>
+            {archivedProjectsCount > 0 && (
+              <span className="absolute -top-1 -right-2 px-1 text-[9px] rounded-full bg-slate-500 text-white font-bold leading-tight">
+                {archivedProjectsCount}
+              </span>
+            )}
+          </div>
+          <span className="text-[10px] truncate max-w-[60px]">Proyectos</span>
+        </button>
+
+        <button
+          onClick={() => setActiveView('links')}
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-1 transition ${
+            activeView === 'links'
+              ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
+              : 'text-slate-500 dark:text-slate-400'
+          }`}
+        >
+          <div className="relative">
+            <Bookmark className="w-5 h-5"/>
+            {pendingLinksCount > 0 && (
+              <span className="absolute -top-1 -right-2 px-1 text-[9px] rounded-full bg-amber-500 text-white font-bold leading-tight">
+                {pendingLinksCount}
+              </span>
+            )}
+          </div>
+          <span className="text-[10px] truncate max-w-[60px]">Enlaces</span>
         </button>
       </nav>
 
+      {/* Task Modal */}
       {isTaskModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 z-50">
           <div className="bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -959,9 +1487,15 @@ export default function App() {
                     onChange={e => setTaskForm({ ...taskForm, context_id: e.target.value })}
                     className="w-full px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-sm outline-none"
                   >
-                    {contexts.map(c => (
+                    {activeContexts.map(c => (
                       <option key={c.id} value={c.id}>@{c.name}</option>
                     ))}
+                    {/* Keep current context in list even if archived */}
+                    {editingTask && contexts.find(c => c.id === taskForm.context_id && c.active === false) && (
+                      <option value={taskForm.context_id}>
+                        @{contextMap[taskForm.context_id]} (archivado)
+                      </option>
+                    )}
                   </select>
                 </div>
 
@@ -973,9 +1507,15 @@ export default function App() {
                     className="w-full px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-sm outline-none"
                   >
                     <option value="">Ninguno</option>
-                    {projects.map(p => (
+                    {activeProjects.map(p => (
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
+                    {/* Keep current project in list even if archived */}
+                    {editingTask && projects.find(p => p.id === taskForm.project_id && p.active === false) && (
+                      <option value={taskForm.project_id}>
+                        📁 {projectMap[taskForm.project_id]} (archivado)
+                      </option>
+                    )}
                   </select>
                 </div>
               </div>
@@ -1000,6 +1540,7 @@ export default function App() {
         </div>
       )}
 
+      {/* Meta Modal: Contexts & Projects Management */}
       {isMetaModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 z-50">
           <div className="bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-6 max-h-[85vh] overflow-y-auto">
@@ -1010,10 +1551,15 @@ export default function App() {
               </button>
             </div>
 
+            {/* Contexts section */}
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                Contextos Dinámicos
-              </h4>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Contextos Dinámicos
+                </h4>
+                <span className="text-[11px] text-slate-400">{activeContexts.length} activos</span>
+              </div>
+
               <form onSubmit={handleAddContext} className="flex gap-2 mb-3">
                 <input
                   type="text"
@@ -1026,19 +1572,62 @@ export default function App() {
                   Añadir
                 </button>
               </form>
-              <div className="flex flex-wrap gap-1.5">
-                {contexts.map(c => (
-                  <span key={c.id} className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-xs">
-                    @{c.name}
-                  </span>
+
+              {/* Active contexts */}
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {activeContexts.map(c => (
+                  <div
+                    key={c.id}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-xs border border-slate-200/80 dark:border-slate-700/60"
+                  >
+                    <span>@{c.name}</span>
+                    <button
+                      onClick={() => handleToggleContextActive(c.id, false)}
+                      className="text-slate-400 hover:text-rose-500 transition p-0.5"
+                      title="Archivar / ocultar contexto de los desplegables"
+                    >
+                      <EyeOff className="w-3 h-3" />
+                    </button>
+                  </div>
                 ))}
               </div>
+
+              {/* Archived contexts */}
+              {archivedContexts.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                  <span className="text-[11px] font-medium text-slate-400 block mb-1.5">
+                    Contextos archivados ({archivedContexts.length})
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {archivedContexts.map(c => (
+                      <div
+                        key={c.id}
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100/60 dark:bg-slate-800/40 text-xs text-slate-400 border border-dashed border-slate-300 dark:border-slate-700"
+                      >
+                        <span className="line-through">@{c.name}</span>
+                        <button
+                          onClick={() => handleToggleContextActive(c.id, true)}
+                          className="text-indigo-500 hover:text-indigo-600 transition p-0.5"
+                          title="Reactivar contexto"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
+            {/* Projects section */}
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                Proyectos Activos
-              </h4>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Proyectos Activos
+                </h4>
+                <span className="text-[11px] text-slate-400">{activeProjects.length} activos</span>
+              </div>
+
               <form onSubmit={handleAddProject} className="flex gap-2 mb-3">
                 <input
                   type="text"
@@ -1051,18 +1640,43 @@ export default function App() {
                   Añadir
                 </button>
               </form>
-              <div className="flex flex-wrap gap-1.5">
-                {projects.map(p => (
-                  <span key={p.id} className="px-2.5 py-1 rounded-lg bg-emerald-950/40 text-emerald-400 text-xs">
-                    📁 {p.name}
-                  </span>
+
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {activeProjects.map(p => (
+                  <div
+                    key={p.id}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/40 text-emerald-400 text-xs border border-emerald-900/40"
+                  >
+                    <span>📁 {p.name}</span>
+                    <button
+                      onClick={() => handleToggleProjectActive(p.id, false)}
+                      className="text-emerald-400/70 hover:text-rose-400 transition p-0.5"
+                      title="Finalizar / Archivar proyecto"
+                    >
+                      <CheckCheck className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 ))}
+              </div>
+
+              <div className="mt-3 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 flex items-center justify-between">
+                <span>{archivedProjectsCount} proyectos finalizados en total</span>
+                <button
+                  onClick={() => {
+                    setIsMetaModalOpen(false);
+                    setActiveView('archived_projects');
+                  }}
+                  className="text-indigo-500 hover:underline font-medium text-[11px]"
+                >
+                  Ver en pestaña Proyectos →
+                </button>
               </div>
             </div>
           </div>
         </div>
       )}
 
+      {/* Gemini API Modal */}
       {showApiModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 z-50">
           <div className="bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-4">
