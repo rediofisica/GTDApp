@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from './lib/supabase';
 import VoiceCommandFAB from './components/VoiceCommandFAB';
+import MarkdownRenderer from './components/MarkdownRenderer';
 import {
   Inbox, Kanban, CheckCircle2, Plus, Search,
-  Moon, Sun, LogOut, Key, FolderPlus, Calendar, Trash2, Edit3, Check, X, SlidersHorizontal
+  Moon, Sun, LogOut, Key, FolderPlus, Calendar, Trash2, Edit3, Check, X, SlidersHorizontal,
+  Maximize2, Minimize2
 } from 'lucide-react';
 
 const ALL_STATUSES = [
@@ -41,6 +43,7 @@ export default function App() {
 
   const carouselRef = useRef(null);
   const [activeCarouselCol, setActiveCarouselCol] = useState(0);
+  const [expandedTaskId, setExpandedTaskId] = useState(null);
 
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
@@ -597,9 +600,10 @@ export default function App() {
               </div>
               <button
                 onClick={() => openTaskModal(null, 'Inbox')}
-                className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-xl hover:bg-indigo-500 shrink-0"
+                className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-xl hover:bg-indigo-500 shrink-0 flex items-center gap-1.5"
               >
-                + Capturar
+                <Plus className="w-3.5 h-3.5" />
+                <span>Capturar</span>
               </button>
             </div>
 
@@ -654,8 +658,10 @@ export default function App() {
               onScroll={handleCarouselScroll}
               className="flex lg:grid lg:grid-cols-5 gap-3.5 overflow-x-auto lg:overflow-visible snap-x snap-mandatory no-scrollbar pb-4"
             >
-              {visibleColumns.map(col => {
+              {visibleColumns.map((col, colIndex) => {
                 const colTasks = filteredAndSortedTasks.filter(t => t.status === col.id);
+                const isRightCol = colIndex >= 3;
+
                 return (
                   <div
                     key={col.id}
@@ -664,79 +670,138 @@ export default function App() {
                     className="w-[86vw] sm:w-[340px] lg:w-auto shrink-0 snap-center bg-slate-200/70 dark:bg-slate-900/70 rounded-2xl p-3 flex flex-col min-h-[65vh] border border-slate-200/80 dark:border-slate-800/80"
                   >
                     <div className={`flex items-center justify-between pb-2.5 mb-3 border-b-2 ${col.color}`}>
-                      <span className="font-semibold text-sm">{col.label}</span>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 font-medium">
-                        {colTasks.length}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm">{col.label}</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 font-medium">
+                          {colTasks.length}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => openTaskModal(null, col.id)}
+                        className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg bg-white dark:bg-slate-800 hover:bg-indigo-600 dark:hover:bg-indigo-600 text-slate-700 dark:text-slate-200 hover:text-white dark:hover:text-white border border-slate-300 dark:border-slate-700 font-medium transition shadow-xs active:scale-95"
+                        title={`Añadir tarea a ${col.label}`}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span className="text-[11px] font-semibold">Añadir</span>
+                      </button>
                     </div>
 
-                    <div className="space-y-2.5 flex-1">
+                    <div className="space-y-2.5 flex-1 relative">
                       {colTasks.length === 0 ? (
-                        <div className="h-32 flex items-center justify-center text-xs text-slate-400 border border-dashed border-slate-300 dark:border-slate-800 rounded-xl">
-                          Sin tareas en {col.label}
+                        <div
+                          onClick={() => openTaskModal(null, col.id)}
+                          className="h-32 flex flex-col items-center justify-center gap-1.5 text-xs text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-400 border border-dashed border-slate-300 dark:border-slate-800 hover:border-indigo-400 dark:hover:border-indigo-500/50 rounded-xl cursor-pointer transition p-4 text-center group"
+                        >
+                          <span>Sin tareas en {col.label}</span>
+                          <span className="text-indigo-600 dark:text-indigo-400 font-medium flex items-center gap-1 group-hover:underline">
+                            <Plus className="w-3.5 h-3.5" /> Añadir tarea aquí
+                          </span>
                         </div>
                       ) : (
-                        colTasks.map(task => (
-                          <div
-                            key={task.id}
-                            draggable
-                            onDragStart={e => handleDragStart(e, task.id)}
-                            className="bg-white dark:bg-slate-900 p-3.5 rounded-xl shadow-sm border border-slate-200/80 dark:border-slate-800 hover:border-indigo-500/60 transition flex flex-col justify-between gap-3"
-                          >
-                            <div>
-                              <div className="flex items-start justify-between gap-2">
-                                <h3 className="font-medium text-sm leading-snug">{task.title}</h3>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    onClick={() => openTaskModal(task)}
-                                    className="p-1.5 text-slate-400 hover:text-indigo-500 rounded-lg active:bg-slate-100 dark:active:bg-slate-800"
+                        colTasks.map(task => {
+                          const isExpanded = expandedTaskId === task.id;
+
+                          return (
+                            <div
+                              key={task.id}
+                              draggable
+                              onDragStart={e => handleDragStart(e, task.id)}
+                              onClick={() => setExpandedTaskId(isExpanded ? null : task.id)}
+                              className={`bg-white dark:bg-slate-900 rounded-xl border transition-all duration-200 cursor-pointer flex flex-col justify-between gap-3 ${
+                                isExpanded
+                                  ? `p-4 shadow-2xl ring-2 ring-indigo-500/70 border-indigo-500 relative z-30 ${
+                                      isRightCol
+                                        ? 'lg:w-[145%] lg:min-w-[320px] lg:max-w-md lg:-translate-x-[31%]'
+                                        : 'lg:w-[145%] lg:min-w-[320px] lg:max-w-md'
+                                    }`
+                                  : 'p-3.5 shadow-sm border-slate-200/80 dark:border-slate-800 hover:border-indigo-500/60 relative'
+                              }`}
+                            >
+                              <div>
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 flex-1">
+                                    <h3 className="font-semibold text-sm leading-snug text-slate-900 dark:text-slate-100">
+                                      {task.title}
+                                    </h3>
+                                  </div>
+                                  <div
+                                    className="flex items-center gap-1 shrink-0"
+                                    onClick={e => e.stopPropagation()}
                                   >
-                                    <Edit3 className="w-4 h-4"/>
-                                  </button>
-                                  <button
-                                    onClick={() => handleStatusChange(task.id, 'Completado')}
-                                    className="p-1.5 text-slate-400 hover:text-emerald-500 rounded-lg active:bg-slate-100 dark:active:bg-slate-800"
-                                    title="Marcar como Completado"
-                                  >
-                                    <Check className="w-4 h-4"/>
-                                  </button>
+                                    <button
+                                      onClick={() => setExpandedTaskId(isExpanded ? null : task.id)}
+                                      className={`p-1.5 rounded-lg transition ${
+                                        isExpanded
+                                          ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/70'
+                                          : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                                      }`}
+                                      title={isExpanded ? 'Contraer vista' : 'Ampliar tarjeta'}
+                                    >
+                                      {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                                    </button>
+                                    <button
+                                      onClick={() => openTaskModal(task)}
+                                      className="p-1.5 text-slate-400 hover:text-indigo-500 rounded-lg active:bg-slate-100 dark:active:bg-slate-800"
+                                      title="Editar tarea"
+                                    >
+                                      <Edit3 className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleStatusChange(task.id, 'Completado')}
+                                      className="p-1.5 text-slate-400 hover:text-emerald-500 rounded-lg active:bg-slate-100 dark:active:bg-slate-800"
+                                      title="Marcar como Completado"
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
                                 </div>
-                              </div>
 
-                              {task.description && (
-                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 line-clamp-3">
-                                  {task.description}
-                                </p>
-                              )}
-                            </div>
-
-                            <div className="space-y-2.5 pt-2.5 border-t border-slate-100 dark:border-slate-800/80">
-                              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                                <span className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300 font-medium">
-                                  @{contextMap[task.context_id] || 'General'}
-                                </span>
-                                {task.project_id && (
-                                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 font-medium truncate max-w-[160px]">
-                                    📁 {projectMap[task.project_id]}
-                                  </span>
+                                {task.description && (
+                                  <div className="mt-2 pt-1 border-t border-slate-100 dark:border-slate-800/60">
+                                    <MarkdownRenderer
+                                      content={task.description}
+                                      className={isExpanded ? '' : 'line-clamp-3'}
+                                    />
+                                    {!isExpanded && task.description.length > 80 && (
+                                      <span className="text-[10px] text-indigo-500 dark:text-indigo-400 font-medium inline-flex items-center gap-0.5 mt-1">
+                                        <Maximize2 className="w-2.5 h-2.5" /> Clic para ampliar
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
 
-                              <div className="flex items-center justify-between text-xs text-slate-400">
-                                <span className="text-[11px]">{new Date(task.created_at).toLocaleDateString()}</span>
-                                <select
-                                  value={task.status}
-                                  onChange={e => handleStatusChange(task.id, e.target.value)}
-                                  className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg px-2 py-1 text-xs font-medium outline-none"
-                                >
-                                  {ALL_STATUSES.map(st => (
-                                    <option key={st} value={st}>{st}</option>
-                                  ))}
-                                </select>
+                              <div
+                                className="space-y-2.5 pt-2.5 border-t border-slate-100 dark:border-slate-800/80"
+                                onClick={e => e.stopPropagation()}
+                              >
+                                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                                  <span className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300 font-medium">
+                                    @{contextMap[task.context_id] || 'General'}
+                                  </span>
+                                  {task.project_id && (
+                                    <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 font-medium truncate max-w-[160px]">
+                                      📁 {projectMap[task.project_id]}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center justify-between text-xs text-slate-400">
+                                  <span className="text-[11px]">{new Date(task.created_at).toLocaleDateString()}</span>
+                                  <select
+                                    value={task.status}
+                                    onChange={e => handleStatusChange(task.id, e.target.value)}
+                                    className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg px-2 py-1 text-xs font-medium outline-none"
+                                  >
+                                    {ALL_STATUSES.map(st => (
+                                      <option key={st} value={st}>{st}</option>
+                                    ))}
+                                  </select>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   </div>
@@ -856,14 +921,19 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium mb-1">Descripción *</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium">Descripción *</label>
+                  <span className="text-[10px] text-indigo-500 dark:text-indigo-400">
+                    Soporta Markdown (**negrita**, - listas, `código`)
+                  </span>
+                </div>
                 <textarea
-                  rows="3"
+                  rows="4"
                   required
                   value={taskForm.description}
                   onChange={e => setTaskForm({ ...taskForm, description: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-sm outline-none focus:ring-2 ring-indigo-500"
-                  placeholder="Detalles, pasos siguientes o notas de contexto..."
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-sm font-mono outline-none focus:ring-2 ring-indigo-500"
+                  placeholder="Detalles, pasos siguientes o notas de contexto en formato Markdown..."
                 />
               </div>
 
@@ -1018,25 +1088,51 @@ export default function App() {
 }
 
 function TaskRowCard({ task, contextName, projectName, onStatusChange, onEdit, onDelete }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   return (
-    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-indigo-500/50 transition">
-      <div className="space-y-1">
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-start justify-between gap-3 hover:border-indigo-500/50 transition">
+      <div className="space-y-1.5 flex-1 min-w-0">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <h3 className={`font-medium text-sm ${task.status === 'Completado' ? 'line-through text-slate-400' : ''}`}>
+          <h3 className={`font-semibold text-sm ${task.status === 'Completado' ? 'line-through text-slate-400' : 'text-slate-900 dark:text-slate-100'}`}>
             {task.title}
           </h3>
           <span className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300 text-xs font-medium">
             @{contextName}
           </span>
           {projectName && (
-            <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 text-xs font-medium">
+            <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 text-xs font-medium truncate max-w-[200px]">
               📁 {projectName}
             </span>
           )}
         </div>
+
         {task.description && (
-          <p className="text-xs text-slate-500 dark:text-slate-400">{task.description}</p>
+          <div
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="cursor-pointer group/desc pt-0.5"
+            title="Clic para expandir / contraer descripción"
+          >
+            <MarkdownRenderer
+              content={task.description}
+              className={isExpanded ? '' : 'line-clamp-2 sm:line-clamp-3'}
+            />
+            {task.description.length > 90 && (
+              <span className="text-[11px] text-indigo-500 dark:text-indigo-400 hover:underline inline-flex items-center gap-1 mt-1 font-medium">
+                {isExpanded ? (
+                  <>
+                    <Minimize2 className="w-3 h-3" /> Mostrar menos
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="w-3 h-3" /> Ver descripción completa
+                  </>
+                )}
+              </span>
+            )}
+          </div>
         )}
+
         <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 pt-1">
           <span className="flex items-center gap-1">
             <Calendar className="w-3 h-3"/> Creada: {new Date(task.created_at).toLocaleDateString()}
@@ -1060,10 +1156,10 @@ function TaskRowCard({ task, contextName, projectName, onStatusChange, onEdit, o
           ))}
         </select>
         <div className="flex items-center gap-1">
-          <button onClick={onEdit} className="p-2 text-slate-400 hover:text-indigo-500 rounded-lg">
+          <button onClick={onEdit} className="p-2 text-slate-400 hover:text-indigo-500 rounded-lg" title="Editar tarea">
             <Edit3 className="w-4 h-4"/>
           </button>
-          <button onClick={onDelete} className="p-2 text-slate-400 hover:text-rose-500 rounded-lg">
+          <button onClick={onDelete} className="p-2 text-slate-400 hover:text-rose-500 rounded-lg" title="Eliminar tarea">
             <Trash2 className="w-4 h-4"/>
           </button>
         </div>
