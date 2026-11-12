@@ -6,7 +6,7 @@ import {
   Inbox, Kanban, CheckCircle2, Plus, Search,
   Moon, Sun, LogOut, Key, FolderPlus, Calendar, Trash2, Edit3, Check, X, SlidersHorizontal,
   Maximize2, Minimize2, Bookmark, BookmarkCheck, ExternalLink, Copy, RotateCcw,
-  FolderArchive, Link2, EyeOff, Archive, CheckCheck, Folder
+  FolderArchive, Link2, EyeOff, Archive, CheckCheck, Folder, Play
 } from 'lucide-react';
 
 const ALL_STATUSES = [
@@ -961,13 +961,23 @@ export default function App() {
                                     >
                                       <Edit3 className="w-3.5 h-3.5" />
                                     </button>
-                                    <button
-                                      onClick={() => handleStatusChange(task.id, 'Completado')}
-                                      className="p-1.5 text-slate-400 hover:text-emerald-500 rounded-lg active:bg-slate-100 dark:active:bg-slate-800"
-                                      title="Marcar como Completado"
-                                    >
-                                      <Check className="w-3.5 h-3.5" />
-                                    </button>
+                                    {task.status === 'In Progress' ? (
+                                      <button
+                                        onClick={() => handleStatusChange(task.id, 'Completado')}
+                                        className="p-1.5 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded-lg active:bg-slate-100 dark:active:bg-slate-800 transition"
+                                        title="Marcar como Completado"
+                                      >
+                                        <Check className="w-3.5 h-3.5 text-emerald-500" />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => handleStatusChange(task.id, 'In Progress')}
+                                        className="p-1.5 text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 rounded-lg active:bg-slate-100 dark:active:bg-slate-800 transition"
+                                        title="Pasar a In Progress"
+                                      >
+                                        <Play className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
 
