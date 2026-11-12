@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Mic, MicOff, Send, Sparkles, Loader2, CheckCircle2, AlertCircle, Keyboard, X } from 'lucide-react';
 
-export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
+export default function VoiceCommandFAB({ apiKey, model, onActionSuccess }) {
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showInputBox, setShowInputBox] = useState(false);
@@ -26,12 +26,22 @@ export default function VoiceCommandFAB({ apiKey, onActionSuccess }) {
           'Content-Type': 'application/json',
           'x-api-key': apiKey
         },
-        body: JSON.stringify({ text: textCommand.trim() })
+        body: JSON.stringify({
+          text: textCommand.trim(),
+          model: model || 'gemini-3.8-flash'
+        })
       });
 
-      const data = await response.json();
+      let data = {};
+      const resText = await response.text();
+      try {
+        data = resText ? JSON.parse(resText) : {};
+      } catch {
+        data = { error: resText || `Error HTTP ${response.status}: Respuesta inesperada` };
+      }
+
       if (!response.ok) {
-        throw new Error(data.error || 'Error procesando el comando con Gemini');
+        throw new Error(data.error || `Error ${response.status}: No se pudo procesar el comando con Gemini`);
       }
 
       showToast('success', data.message || 'Comando ejecutado correctamente');

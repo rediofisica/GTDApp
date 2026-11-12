@@ -32,6 +32,7 @@ export default async function handler(req, res) {
 
   const userId = keyData.user_id;
   const rawPrompt = typeof req.body === 'string' ? req.body : req.body?.text;
+  const modelName = (typeof req.body === 'object' && req.body?.model?.trim()) || 'gemini-3.8-flash';
 
   if (!rawPrompt || !rawPrompt.trim()) {
     return res.status(400).json({ error: 'No se recibió texto en la petición' });
@@ -77,7 +78,7 @@ REGLAS DE DECISIÓN:
 `;
 
     const geminiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

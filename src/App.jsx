@@ -14,9 +14,9 @@ const ALL_STATUSES = [
 ];
 
 const KANBAN_COLUMNS = [
+  { id: 'In Progress', label: 'In Progress', color: 'border-purple-500', dot: 'bg-purple-500' },
   { id: 'Next Action', label: 'Next Action', color: 'border-amber-500', dot: 'bg-amber-500' },
   { id: 'Action', label: 'Action', color: 'border-blue-500', dot: 'bg-blue-500' },
-  { id: 'In Progress', label: 'In Progress', color: 'border-purple-500', dot: 'bg-purple-500' },
   { id: 'Waiting', label: 'Waiting', color: 'border-orange-500', dot: 'bg-orange-500' },
   { id: 'Someday', label: 'Someday', color: 'border-slate-400', dot: 'bg-slate-400' }
 ];
@@ -25,7 +25,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(() =>
-    localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : true
+    localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : false
   );
 
   const [tasks, setTasks] = useState([]);
@@ -34,6 +34,9 @@ export default function App() {
   const [links, setLinks] = useState([]);
   const [linksTableMissing, setLinksTableMissing] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [geminiModel, setGeminiModel] = useState(() =>
+    localStorage.getItem('gemini_model') || 'gemini-3.8-flash'
+  );
 
   // activeView can be: 'inbox' | 'kanban' | 'completed' | 'archived_projects' | 'links'
   const [activeView, setActiveView] = useState('kanban');
@@ -1681,22 +1684,65 @@ export default function App() {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 z-50">
           <div className="bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="font-bold text-lg">API Key para Gemini AI</h3>
+              <h3 className="font-bold text-lg">Configuración de Gemini AI</h3>
               <button onClick={() => setShowApiModal(false)} className="p-1 text-slate-400 hover:text-slate-200">
                 <X className="w-5 h-5"/>
               </button>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Usa esta clave en el header <code className="text-indigo-400">x-api-key</code> para conectar Tasker o el servidor MCP con <code className="text-indigo-400">/api/gemini-voice</code>.
-            </p>
-            <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-slate-800 font-mono text-xs break-all select-all">
-              {apiKey || 'Generando clave...'}
+
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Modelo de Gemini
+              </label>
+              <input
+                type="text"
+                value={geminiModel}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setGeminiModel(val);
+                  localStorage.setItem('gemini_model', val);
+                }}
+                placeholder="Ej: gemini-3.8-flash"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-sm font-mono outline-none focus:ring-2 ring-indigo-500"
+              />
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[11px] text-slate-400 mr-1">Sugeridos:</span>
+                {['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'].map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      setGeminiModel(m);
+                      localStorage.setItem('gemini_model', m);
+                    }}
+                    className={`px-2 py-0.5 rounded-lg text-xs font-mono transition border ${
+                      geminiModel === m
+                        ? 'bg-indigo-600 border-indigo-600 text-white font-semibold'
+                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-500'
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                API Key para acceso externo (Tasker / MCP)
+              </label>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Usa esta clave en el header <code className="text-indigo-400">x-api-key</code> para conectar aplicaciones externas con <code className="text-indigo-400">/api/gemini-voice</code>.
+              </p>
+              <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-slate-800 font-mono text-xs break-all select-all">
+                {apiKey || 'Generando clave...'}
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      <VoiceCommandFAB apiKey={apiKey} onActionSuccess={fetchAllData}/>
+      <VoiceCommandFAB apiKey={apiKey} model={geminiModel} onActionSuccess={fetchAllData}/>
     </div>
   );
 }
