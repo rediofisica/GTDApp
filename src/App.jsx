@@ -1452,7 +1452,7 @@ export default function App() {
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-medium">Descripción *</label>
                   <span className="text-[10px] text-indigo-500 dark:text-indigo-400">
-                    Soporta Markdown (**negrita**, - listas, `código`)
+                    Soporta Markdown GFM (**negrita**, - [x] tareas, tablas, `código`)
                   </span>
                 </div>
                 <textarea

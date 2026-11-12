@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function MarkdownRenderer({ content, className = '' }) {
   if (!content) return null;
@@ -7,6 +8,7 @@ export default function MarkdownRenderer({ content, className = '' }) {
   return (
     <div className={`text-xs text-slate-600 dark:text-slate-300 leading-relaxed break-words space-y-1.5 ${className}`}>
       <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
         components={{
           a: ({ node, ...props }) => (
             <a
@@ -17,15 +19,42 @@ export default function MarkdownRenderer({ content, className = '' }) {
               onClick={(e) => e.stopPropagation()}
             />
           ),
-          ul: ({ node, ...props }) => (
-            <ul {...props} className="list-disc list-inside space-y-0.5 my-1 pl-1" />
-          ),
+          ul: ({ node, className, ...props }) => {
+            const isTaskList = className?.includes('contains-task-list');
+            return (
+              <ul
+                {...props}
+                className={`my-1 ${isTaskList ? 'list-none pl-0 space-y-1' : 'list-disc list-inside space-y-0.5 pl-1'}`}
+              />
+            );
+          },
           ol: ({ node, ...props }) => (
             <ol {...props} className="list-decimal list-inside space-y-0.5 my-1 pl-1" />
           ),
-          li: ({ node, ...props }) => (
-            <li {...props} className="leading-snug" />
-          ),
+          li: ({ node, className, children, ...props }) => {
+            const isTask = className?.includes('task-list-item');
+            return (
+              <li
+                {...props}
+                className={`leading-snug ${isTask ? 'list-none flex items-start gap-2 my-0.5' : ''}`}
+              >
+                {children}
+              </li>
+            );
+          },
+          input: ({ node, ...props }) => {
+            if (props.type === 'checkbox') {
+              return (
+                <input
+                  {...props}
+                  className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-indigo-600 accent-indigo-600 shrink-0 cursor-default"
+                  readOnly
+                  onClick={(e) => e.stopPropagation()}
+                />
+              );
+            }
+            return <input {...props} />;
+          },
           p: ({ node, ...props }) => (
             <p {...props} className="my-1 first:mt-0 last:mb-0" />
           ),
@@ -34,6 +63,32 @@ export default function MarkdownRenderer({ content, className = '' }) {
           ),
           em: ({ node, ...props }) => (
             <em {...props} className="italic" />
+          ),
+          del: ({ node, ...props }) => (
+            <del {...props} className="line-through opacity-70 text-slate-500 dark:text-slate-400" />
+          ),
+          table: ({ node, ...props }) => (
+            <div
+              className="overflow-x-auto my-2 rounded-lg border border-slate-200 dark:border-slate-700/80"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <table {...props} className="min-w-full divide-y divide-slate-200 dark:divide-slate-700/80 text-xs" />
+            </div>
+          ),
+          thead: ({ node, ...props }) => (
+            <thead {...props} className="bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200" />
+          ),
+          tbody: ({ node, ...props }) => (
+            <tbody {...props} className="divide-y divide-slate-200 dark:divide-slate-800/80 bg-white/50 dark:bg-slate-900/50" />
+          ),
+          tr: ({ node, ...props }) => (
+            <tr {...props} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30" />
+          ),
+          th: ({ node, ...props }) => (
+            <th {...props} className="px-2.5 py-1.5 text-left font-semibold text-slate-900 dark:text-slate-100" />
+          ),
+          td: ({ node, ...props }) => (
+            <td {...props} className="px-2.5 py-1.5 text-slate-600 dark:text-slate-300" />
           ),
           code: ({ node, inline, className, children, ...props }) => (
             <code
